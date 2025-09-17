@@ -1,5 +1,4 @@
-# ExampleTeam
-Example Project Repo for VirtualWebCam
+# Justice for Short Kings - The Automatic Height Equalizer You Never Knew You Needed!
 
 <!-- This sets up to run the tests and place a badge on GitHub if it passes -->
 
@@ -8,19 +7,27 @@ Example Project Repo for VirtualWebCam
 
 
 Brief Description:
-The goal of this project is to build a virtual webcam to allow manipulations of live-video feeds from a webcam to be used in Zoom
+The goal of this project is to bring prosperity to the short kings around the world. With one quick snapshot, we find the shortest person in a photo and equalize their height to match the average height of the group by various user-selected methods (e.g., a stool, a hat, or a height adjustment procedure of the legs or torso).  
 
 Team Members:
-Dr Huppert (huppert1@pitt.edu)
-Yang Du (yang.du@pitt.edu)
+ - Connor Murray - cjm308@pitt.edu
+ - William (Will) Muckelroy III - wlm14@pitt.edu
+ - Iyan Nekib - iyn1@pitt.edu
+ - Yoel Tamar - yot22@pitt.edu
+ - Raymond Zheng - raz43@pitt.edu
 
-
+## Major Milestones
+* Detection of the Person(s)
+* Evaluation of Heights within the Image
+* Implementing a GUI that allows the user to select their method of height adjustment
+* Implementation of the actual modification of the image
+* Bonus: Equalize ALL the heights to the same height via shortening and lengthening
 
 ## File Descriptions
 This project contains a number of additional files that are used by GitHub to provide information and do tests on code.
 
 ### Markup files (*.md)
-Markup files, such as this README file are shown on the home page of GitHub
+Markup files, such as this README file, are shown on the home page of GitHub
 
 [Here is a good reference for how to use markup files](https://github.com/lifeparticle/Markdown-Cheatsheet)
 
