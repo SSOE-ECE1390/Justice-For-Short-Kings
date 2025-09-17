@@ -1,0 +1,25 @@
+Metadata-Version: 2.4
+Name: virtualwebcam
+Version: 0.0.0
+Summary: example project for ECE 1390/2390
+Author: Dr Huppert
+License: MIT
+Platform: unix
+Platform: linux
+Platform: cygwin
+Platform: osx
+Platform: win32
+Classifier: Programming Language :: Python :: 3.12
+License-File: LICENSE.md
+Requires-Dist: matplotlib>=3.0
+Requires-Dist: mediapipe>=0.10
+Requires-Dist: numpy>=1.26
+Requires-Dist: opencv-contrib-python>=4.11
+Requires-Dist: opencv-python>=4.11
+Requires-Dist: pillow>=11.2
+Provides-Extra: testing
+Requires-Dist: pytest>=7.2; extra == "testing"
+Requires-Dist: pytest-cov>=6.1; extra == "testing"
+Requires-Dist: mypy>=1.15; extra == "testing"
+Requires-Dist: tox>4.25; extra == "testing"
+Dynamic: license-file

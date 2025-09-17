@@ -1,0 +1,12 @@
+matplotlib>=3.0
+mediapipe>=0.10
+numpy>=1.26
+opencv-contrib-python>=4.11
+opencv-python>=4.11
+pillow>=11.2
+
+[testing]
+pytest>=7.2
+pytest-cov>=6.1
+mypy>=1.15
+tox>4.25

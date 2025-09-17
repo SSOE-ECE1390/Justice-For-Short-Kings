@@ -1,0 +1,15 @@
+LICENSE.md
+README.md
+pyproject.toml
+setup.cfg
+setup.py
+src/virtualwebcam/__init__.py
+src/virtualwebcam/example_code.py
+src/virtualwebcam/py.typed
+src/virtualwebcam.egg-info/PKG-INFO
+src/virtualwebcam.egg-info/SOURCES.txt
+src/virtualwebcam.egg-info/dependency_links.txt
+src/virtualwebcam.egg-info/not-zip-safe
+src/virtualwebcam.egg-info/requires.txt
+src/virtualwebcam.egg-info/top_level.txt
+tests/test_webcam.py

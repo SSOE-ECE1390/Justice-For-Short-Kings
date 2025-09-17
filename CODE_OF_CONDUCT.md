@@ -1,0 +1,7 @@
+# Contributor Code of Conduct
+
+Being a member of the University of Pittsburgh community is a privilege. This privilege comes with the responsibility to act in accordance with all institutional rules and policies. This Student Code of Conduct (Code) provides information on behavioral expectations and outlines the process used to address Violations of these expectations.
+
+The Board of Trustees has the authority to establish regulations and standards for Students. Responsibility for these regulations and standards is delegated to the Chancellor and in turn to specified administrative officials. The Board of Trustees and University administrators acknowledge and affirm the rights and responsibilities of Students – as members of society, as guaranteed by Federal and State Constitutions, and as expressed by federal, state, and local laws.
+
+The Code is subject to change at the discretion of the University. All Students are expected to familiarize themselves with and are required to abide by the provisions of the current Code. To ensure you have the most recent version, please visit www.studentaffairs.pitt.edu/conduct/. Copies of the Code are also available at the Office of Student Conduct, 738 William Pitt Union.
