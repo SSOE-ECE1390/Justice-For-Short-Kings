@@ -4,4 +4,5 @@ numpy==1.26.4
 opencv-contrib-python==4.11.0.86
 opencv-python==4.11.0.86
 pillow==11.2.1
-
+PyQt6==6.7.0
+pyqt6-tools==6.7.0.1.3
