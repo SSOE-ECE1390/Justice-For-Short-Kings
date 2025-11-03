@@ -23,6 +23,22 @@ Team Members:
 * Implementation of the actual modification of the image
 * Bonus: Equalize ALL the heights to the same height via shortening and lengthening
 
+## Height Equalizer (Iyan)
+The module under `src/Iyan` detects every visible person in a photo, finds the shortest one, and either stretches their upper body or adds a configurable accessory so they match a reference person's height.
+
+1. Download a MediaPipe pose landmarker model (e.g. `pose_landmarker_full.task` from the [MediaPipe release assets](https://developers.google.com/mediapipe/solutions/vision/pose_landmarker)).
+2. Run the helper script:
+
+   ```
+   python -m src.Iyan.hi path/to/input.jpg path/to/output.jpg --model path/to/pose_landmarker_full.task --method accessory
+   ```
+
+   - Use `--method stretch` to scale the shortest person's upper body.
+   - Supply `--reference-index` to pick who should be matched (defaults to the tallest).
+   - Optionally pass `--accessory path/to/hat.png` to use a custom transparent PNG.
+
+The core logic lives in `src/Iyan/height_equalizer.py` and can be imported elsewhere to plug into a GUI or pipeline.
+
 ## File Descriptions
 This project contains a number of additional files that are used by GitHub to provide information and do tests on code.
 
