@@ -41,8 +41,7 @@ class RealtimeHeightEqualizer:
         self,
         pose_model_path: Path | str,
         *,
-        accessory_path: Optional[Path | str] = None,
-        accessory_folder: Optional[Path | str] = None,  # Folder with multiple accessories
+        hat_model_path: Optional[Path | str] = None,
         camera_index: int = 0,
         max_people: int = 5,
         min_confidence: float = 0.5,
@@ -66,8 +65,8 @@ class RealtimeHeightEqualizer:
         self.camera_index = camera_index
         self.cap = None
         
-        # Load or generate hat models (now supports folders)
-        self.hat_models = self._load_hat_models(accessory_path, accessory_folder)
+        # Load or generate 3D hat models
+        self.hat_models = self._load_hat_models(hat_model_path)
         
         # Tracking
         self.frame_count = 0
@@ -75,67 +74,24 @@ class RealtimeHeightEqualizer:
         self.fps = 0
         self.last_time = time.time()
         
-    def _load_hat_models(
-        self, 
-        hat_path: Optional[Path | str],
-        hat_folder: Optional[Path | str]
-    ) -> List[ArrayU8]:
-        """Load multiple hat designs as RGBA images from file(s) or folder."""
+    def _load_hat_models(self, hat_path: Optional[Path | str]) -> List[ArrayU8]:
+        """Load multiple hat designs as RGBA images."""
         hats = []
         
-        # Load from specific file if provided
         if hat_path and Path(hat_path).exists():
-            loaded = self._load_single_accessory(Path(hat_path))
-            if loaded is not None:
-                hats.append(loaded)
-                print(f"✓ Loaded accessory: {Path(hat_path).name}")
-        
-        # Load all from folder if provided
-        if hat_folder and Path(hat_folder).exists():
-            folder = Path(hat_folder)
-            # Support PNG, JPG, OBJ (converted to 2D projection)
-            for ext in ['*.png', '*.PNG', '*.jpg', '*.JPG', '*.jpeg', '*.JPEG']:
-                for file_path in folder.glob(ext):
-                    loaded = self._load_single_accessory(file_path)
-                    if loaded is not None:
-                        hats.append(loaded)
-                        print(f"✓ Loaded accessory: {file_path.name}")
+            hat = cv2.imread(str(hat_path), cv2.IMREAD_UNCHANGED)
+            if hat is not None and hat.shape[2] == 4:
+                hats.append(hat)
         
         # Generate default hats if none loaded
         if not hats:
-            print("No custom accessories found, generating defaults...")
             hats.extend([
                 self._generate_top_hat(),
                 self._generate_party_hat(),
                 self._generate_crown(),
             ])
         
-        print(f"Total accessories loaded: {len(hats)}")
         return hats
-    
-    def _load_single_accessory(self, file_path: Path) -> Optional[ArrayU8]:
-        """Load a single accessory file (PNG/JPG)."""
-        try:
-            # Try loading as image
-            img = cv2.imread(str(file_path), cv2.IMREAD_UNCHANGED)
-            if img is None:
-                return None
-            
-            # Convert to RGBA if needed
-            if img.shape[2] == 3:
-                # Add alpha channel (fully opaque)
-                alpha = np.full(img.shape[:2], 255, dtype=np.uint8)
-                img = np.dstack([img, alpha])
-            elif img.shape[2] == 4:
-                # Already RGBA
-                pass
-            else:
-                return None
-            
-            return img
-        except Exception as e:
-            print(f"Warning: Could not load {file_path}: {e}")
-            return None
     
     def _generate_top_hat(self) -> ArrayU8:
         """Generate a classic top hat."""
@@ -383,33 +339,27 @@ class RealtimeHeightEqualizer:
         person: Person3D, 
         stretch_factor: float
     ) -> ArrayU8:
-        """Stretch only the top of the person's head vertically (not whole body)."""
+        """Stretch a person's face/upper body vertically."""
         nose_idx = 0
-        left_eye_idx = 2
-        right_eye_idx = 5
-        left_ear_idx = 7
-        right_ear_idx = 8
+        left_shoulder = 11
+        right_shoulder = 12
         
-        # Define head-only region (eyes, nose, top of head)
-        head_points = []
-        for idx in [nose_idx, left_eye_idx, right_eye_idx, left_ear_idx, right_ear_idx]:
+        # Define face region (nose to shoulders)
+        face_points = []
+        for idx in [nose_idx, left_shoulder, right_shoulder]:
             if person.visibility[idx] > 0.5:
-                head_points.append(person.landmarks_2d[idx])
+                face_points.append(person.landmarks_2d[idx])
         
-        if len(head_points) < 2:
+        if len(face_points) < 2:
             return frame
         
-        head_points = np.array(head_points)
+        face_points = np.array(face_points)
         
-        # Create tight bounding box for HEAD ONLY (not shoulders)
-        head_center_y = np.mean(head_points[:, 1])
-        head_top_y = np.min(head_points[:, 1])
-        
-        # Only stretch the TOP portion of the head (above eyes)
-        x_min = int(head_points[:, 0].min() - person.head_width * 0.3)
-        x_max = int(head_points[:, 0].max() + person.head_width * 0.3)
-        y_min = int(head_top_y - person.head_width * 0.8)  # Start well above head
-        y_max = int(head_center_y)  # End at eye level
+        # Create bounding box for face/upper body
+        x_min = int(face_points[:, 0].min() - person.head_width)
+        x_max = int(face_points[:, 0].max() + person.head_width)
+        y_min = int(face_points[:, 1].min() - person.head_width)
+        y_max = int(face_points[:, 1].max() + person.head_width * 2)
         
         # Clamp to frame bounds
         h, w = frame.shape[:2]
@@ -421,36 +371,15 @@ class RealtimeHeightEqualizer:
         if x_max <= x_min or y_max <= y_min:
             return frame
         
-        # Extract ONLY the head region
+        # Extract region
         region = frame[y_min:y_max, x_min:x_max].copy()
         
-        # Calculate stretched height (only for top of head)
+        # Calculate stretched height
         original_h = y_max - y_min
-        extra_height = int((stretch_factor - 1.0) * person.height_pixels)
-        stretched_h = original_h + extra_height
+        stretched_h = int(original_h * stretch_factor)
         
         if stretched_h <= original_h:
             return frame
-        
-        # Create person mask for this region only
-        mask = np.zeros((original_h, x_max - x_min), dtype=np.float32)
-        
-        # Create ellipse mask for head (to preserve background)
-        center_x = (x_max - x_min) // 2
-        center_y = (y_max - y_min) // 2
-        radius_x = int(person.head_width * 0.5)
-        radius_y = original_h // 2
-        
-        cv2.ellipse(
-            mask,
-            (center_x, center_y),
-            (radius_x, radius_y),
-            0, 0, 360,
-            1.0, -1
-        )
-        
-        # Smooth the mask edges
-        mask = cv2.GaussianBlur(mask, (21, 21), 0)
         
         # Resize region
         region_w = x_max - x_min
@@ -460,44 +389,38 @@ class RealtimeHeightEqualizer:
             interpolation=cv2.INTER_CUBIC
         )
         
-        # Resize mask too
-        stretched_mask = cv2.resize(
-            mask,
-            (region_w, stretched_h),
-            interpolation=cv2.INTER_LINEAR
-        )
-        
         # Create output frame
         output = frame.copy()
         
-        # Calculate placement (anchor at bottom, extend upward)
+        # Calculate placement (anchor at bottom of original region)
         new_y_min = y_max - stretched_h
         new_y_max = y_max
         
-        # Clamp
+        # Clamp again
         if new_y_min < 0:
             trim = -new_y_min
             stretched_region = stretched_region[trim:, :]
-            stretched_mask = stretched_mask[trim:, :]
             new_y_min = 0
         
         if new_y_max > h:
             trim = new_y_max - h
             stretched_region = stretched_region[:-trim, :]
-            stretched_mask = stretched_mask[:-trim, :]
             new_y_max = h
         
-        # Get background region
-        bg_region = output[new_y_min:new_y_max, x_min:x_max].copy()
+        # Blend with feathered edges for smooth transition
+        blend_size = min(20, (new_y_max - new_y_min) // 4)
         
-        # Blend using mask (only affects head, not background)
-        mask_3d = stretched_mask[:, :, np.newaxis]
-        blended = (
-            stretched_region * mask_3d + 
-            bg_region * (1.0 - mask_3d)
-        ).astype(np.uint8)
+        # Top feather
+        for i in range(blend_size):
+            alpha = i / blend_size
+            output[new_y_min + i, x_min:x_max] = (
+                alpha * stretched_region[i] + 
+                (1 - alpha) * output[new_y_min + i, x_min:x_max]
+            ).astype(np.uint8)
         
-        output[new_y_min:new_y_max, x_min:x_max] = blended
+        # Middle (full replacement)
+        output[new_y_min + blend_size:new_y_max, x_min:x_max] = \
+            stretched_region[blend_size:, :]
         
         return output
     
@@ -777,12 +700,7 @@ def main():
     parser.add_argument(
         "--hat",
         type=Path,
-        help="Optional custom hat/accessory (PNG/JPG with transparency)"
-    )
-    parser.add_argument(
-        "--accessories",
-        type=Path,
-        help="Optional folder containing multiple accessories (PNG/JPG files)"
+        help="Optional custom hat model (transparent PNG)"
     )
     parser.add_argument(
         "--camera",
@@ -806,8 +724,7 @@ def main():
     
     equalizer = RealtimeHeightEqualizer(
         pose_model_path=args.model,
-        accessory_path=args.hat,
-        accessory_folder=args.accessories,
+        hat_model_path=args.hat,
         camera_index=args.camera,
     )
     
