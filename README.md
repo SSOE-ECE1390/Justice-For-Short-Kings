@@ -51,3 +51,77 @@ To install from a requirements.txt file use
 ```
     pip install -r requirements.txt
 ```
+
+## Running the Application
+
+### Main GUI (PyQt6)
+
+The project now has a unified GUI application that integrates all team member features:
+
+```bash
+python main_gui.py
+```
+
+**Features:**
+- Live webcam feed
+- Image upload capability
+- Webcam capture
+- Feature selection dropdown
+- Real-time processing visualization
+
+See [GUI_README.md](GUI_README.md) for detailed documentation.
+
+### Individual Feature Demos
+
+Each team member has their own demo scripts:
+
+**Will - Segmentation Expansion (V2 - YOLO + SAM)**
+```bash
+python src/Will/demo_v2.py src/Will/test_images/test_image1.png
+```
+
+**Iyan - Hat & Stretch**
+```bash
+python src/Iyan/realtime_height_equalizer.py
+```
+
+## Current Features
+
+### Will - Segmentation Expansion (2-Stage Instance Segmentation)
+- Uses YOLO for person detection
+- Uses SAM for precise segmentation
+- Expands shortest person to match tallest
+- Shows 5-step processing pipeline
+- Location: `src/Will/`
+- See: `src/Will/V2_README.md`
+
+### Iyan - Hat & Stretch
+- Real-time height equalization
+- Multiple modes: hat, stretch, or both
+- Uses MediaPipe for pose detection
+- Location: `src/Iyan/`
+
+### Connor, Yoel, Raymond
+- Features in development
+
+## Quick Start
+
+1. **Install dependencies:**
+```bash
+pip install -r requirements.txt
+```
+
+2. **Download SAM model (for Will's feature):**
+```bash
+python src/Will/download_sam_model.py
+```
+
+3. **Run the GUI:**
+```bash
+python main_gui.py
+```
+
+4. **Or test individual features:**
+```bash
+python src/Will/demo_v2.py src/Will/test_images/test_image1.png
+```
