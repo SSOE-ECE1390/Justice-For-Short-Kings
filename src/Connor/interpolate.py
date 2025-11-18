@@ -3,31 +3,6 @@ import numpy as np
 import sys
 
 
-face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-
-img = cv2.imread("test.jpeg")
-
-gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=7, minSize=(20, 20))
-
-# If no faces detected, exit with a message
-if len(faces) == 0:
-    print("No faces detected in image")
-    sys.exit(0)
-
-# Select the bounding box whose bottom (y + h) is the lowest in the image
-# i.e., the face with the maximum y+h value
-x, y, w, h = max(faces, key=lambda r: r[1] + r[3])
-
-cv2.rectangle(img, (x, y), (x + w, y + h), (255, 0, 0), 2) # Blue rectangle, thickness 2
-
-# Display the image with bounding boxes
-#cv2.imshow('Face Detection', img)
-#cv2.waitKey(0)
-#cv2.destroyAllWindows()
-
-#head_roi = img[y : y + h, x : x + w].copy()
 
 
 
@@ -93,10 +68,36 @@ def stretch_roi_and_overwrite(image_path, x, y, w, h, new_height):
 
     return final_img
 
+if __name__ == "__main__":
+    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 
-im = stretch_roi_and_overwrite("test.jpeg",x,y,w,h,500)
+    img = cv2.imread("test.jpeg")
 
-cv2.imshow("original", img)
-cv2.imshow("test", im)
-cv2.waitKey(0)
-cv2.destroyAllWindows()
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=7, minSize=(20, 20))
+
+    # If no faces detected, exit with a message
+    if len(faces) == 0:
+        print("No faces detected in image")
+        sys.exit(0)
+
+# Select the bounding box whose bottom (y + h) is the lowest in the image
+# i.e., the face with the maximum y+h value
+    x, y, w, h = max(faces, key=lambda r: r[1] + r[3])
+
+    cv2.rectangle(img, (x, y), (x + w, y + h), (255, 0, 0), 2) # Blue rectangle, thickness 2
+
+# Display the image with bounding boxes
+#cv2.imshow('Face Detection', img)
+#cv2.waitKey(0)
+#cv2.destroyAllWindows()
+
+#head_roi = img[y : y + h, x : x + w].copy()
+
+    im = stretch_roi_and_overwrite("test.jpeg",x,y,w,h,500)
+
+    cv2.imshow("original", img)
+    cv2.imshow("test", im)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
