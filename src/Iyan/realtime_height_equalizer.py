@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 import time
 from dataclasses import dataclass
 from enum import Enum
@@ -72,10 +71,9 @@ class RealtimeHeightEqualizer:
         self.camera_index = camera_index
         self.cap = None
 
-        # Load or generate 3D hat models (top_hat, party_hat, crown)
+        # Load or generate hat models (top, party, crown)
         self.hat_models = self._load_hat_models(hat_model_path)
 
-        # Normalize hat style and set current hat index
         if isinstance(hat_style, HatStyle):
             self.hat_style = hat_style
         else:
@@ -84,7 +82,6 @@ class RealtimeHeightEqualizer:
             except ValueError:
                 self.hat_style = HatStyle.TOP_HAT
 
-        # Default mapping for built-in hats
         if len(self.hat_models) >= 3:
             style_to_index = {
                 HatStyle.TOP_HAT: 0,
@@ -93,28 +90,23 @@ class RealtimeHeightEqualizer:
             }
             self.current_hat_index = style_to_index.get(self.hat_style, 0)
         else:
-            # Custom single hat or unexpected count
             self.current_hat_index = 0
 
-        # Tracking
         self.frame_count = 0
-        self.total_frame_count = 0  # Never reset - for timestamps
+        self.total_frame_count = 0
         self.fps = 0
         self.last_time = time.time()
 
     # --------------------------------------------------------------------- IO
 
     def _load_hat_models(self, hat_path: Optional[Path | str]) -> List[ArrayU8]:
-        """Load multiple hat designs as RGBA images."""
         hats: List[ArrayU8] = []
 
-        # Optional custom PNG (single hat)
         if hat_path and Path(hat_path).exists():
             hat = cv2.imread(str(hat_path), cv2.IMREAD_UNCHANGED)
             if hat is not None and hat.shape[2] == 4:
                 hats.append(hat)
 
-        # Generate default hats if none loaded
         if not hats:
             hats.extend(
                 [
@@ -129,11 +121,9 @@ class RealtimeHeightEqualizer:
     # ---------------------------------------------------------------- hat gens
 
     def _generate_top_hat(self) -> ArrayU8:
-        """Generate a classic top hat."""
         w, h = 300, 200
         hat = np.zeros((h, w, 4), dtype=np.uint8)
 
-        # Crown (tall part)
         crown_w = int(w * 0.5)
         crown_x = (w - crown_w) // 2
         crown_h = int(h * 0.65)
@@ -145,8 +135,6 @@ class RealtimeHeightEqualizer:
             -1,
         )
 
-        # Brim (wide part)
-        brim_h = h - crown_h
         cv2.rectangle(
             hat,
             (0, crown_h),
@@ -155,7 +143,6 @@ class RealtimeHeightEqualizer:
             -1,
         )
 
-        # Ribbon
         ribbon_y = int(crown_h * 0.85)
         ribbon_h = max(8, crown_h // 10)
         cv2.rectangle(
@@ -166,7 +153,6 @@ class RealtimeHeightEqualizer:
             -1,
         )
 
-        # Add subtle shine gradient on left side
         for i in range(crown_h):
             alpha = int(30 * (1 - i / crown_h))
             hat[i, crown_x : crown_x + crown_w // 3, :3] = np.clip(
@@ -178,10 +164,7 @@ class RealtimeHeightEqualizer:
         return hat
 
     def _generate_party_hat(self) -> ArrayU8:
-        """Generate a colorful party hat (cone shape) with alpha-safe drawing."""
         w, h = 220, 260
-
-        # RGB + alpha separate to avoid slice issues with OpenCV
         rgb = np.zeros((h, w, 3), dtype=np.uint8)
         alpha = np.zeros((h, w), dtype=np.uint8)
 
@@ -196,10 +179,8 @@ class RealtimeHeightEqualizer:
             np.int32,
         )
 
-        # Main cone mask
         cv2.fillConvexPoly(alpha, pts, 255)
 
-        # Stripes across the cone
         stripe_colors = [
             (255, 200, 200),
             (230, 170, 230),
@@ -225,36 +206,29 @@ class RealtimeHeightEqualizer:
                 thickness=-1,
             )
 
-        # Keep stripes only inside triangle
         mask_bool = alpha > 0
         rgb[mask_bool] = stripes_rgb[mask_bool]
 
-        # Pom-pom at top
         pom_color = (210, 120, 255)
         pom_center = (w // 2, apex_y)
         pom_radius = 10
         cv2.circle(alpha, pom_center, pom_radius, 255, -1)
         cv2.circle(rgb, pom_center, pom_radius, pom_color, -1)
 
-        # Stack into RGBA
         hat = np.dstack([rgb, alpha])
         return hat
 
     def _generate_crown(self) -> ArrayU8:
-        """Generate a royal crown with jewels (RGBA, alpha-safe)."""
         w, h = 260, 160
-
         rgb = np.zeros((h, w, 3), dtype=np.uint8)
         alpha = np.zeros((h, w), dtype=np.uint8)
 
         base_top = int(h * 0.55)
-        base_color = (0, 240, 255)  # bright cyan
+        base_color = (0, 240, 255)
 
-        # Base band
         rgb[base_top:h, :, :] = base_color
         cv2.rectangle(alpha, (0, base_top), (w - 1, h - 1), 255, -1)
 
-        # Triangular spikes
         spike_count = 5
         spacing = w // (spike_count + 1)
         spike_width = int(spacing * 0.8)
@@ -278,7 +252,6 @@ class RealtimeHeightEqualizer:
             cv2.fillConvexPoly(alpha, pts, 255)
             cv2.fillConvexPoly(rgb, pts, base_color)
 
-        # Jewels
         jewel_colors = [
             (0, 0, 255),
             (0, 255, 0),
@@ -300,12 +273,10 @@ class RealtimeHeightEqualizer:
     # ---------------------------------------------------------------- camera
 
     def start_camera(self) -> bool:
-        """Initialize the camera."""
         self.cap = cv2.VideoCapture(self.camera_index)
         if not self.cap.isOpened():
             return False
 
-        # Set camera properties for better performance
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
         self.cap.set(cv2.CAP_PROP_FPS, 30)
@@ -317,14 +288,11 @@ class RealtimeHeightEqualizer:
     def detect_people_with_depth(
         self, frame_bgr: ArrayU8, timestamp_ms: int
     ) -> List[Person3D]:
-        """Detect people and estimate their real heights accounting for depth."""
         h, w = frame_bgr.shape[:2]
 
-        # Convert to RGB for MediaPipe
         rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
 
-        # Detect poses
         result = self.pose_landmarker.detect_for_video(mp_image, timestamp_ms)
 
         people: List[Person3D] = []
@@ -334,23 +302,17 @@ class RealtimeHeightEqualizer:
 
             norm_landmarks = result.pose_landmarks[idx]
 
-            # Convert normalized landmarks to pixel coordinates
             landmarks_2d = np.array(
                 [[lm.x * w, lm.y * h] for lm in norm_landmarks], dtype=np.float32
             )
-
-            # 3D world coordinates (in meters from MediaPipe)
             landmarks_3d = np.array(
                 [[lm.x, lm.y, lm.z] for lm in world_landmarks], dtype=np.float32
             )
-
-            # Visibility scores
             visibility = np.array(
                 [getattr(lm, "visibility", 1.0) for lm in norm_landmarks],
                 dtype=np.float32,
             )
 
-            # Height in pixels based on visible landmarks
             visible_mask = visibility > 0.5
             if not np.any(visible_mask):
                 continue
@@ -359,7 +321,6 @@ class RealtimeHeightEqualizer:
             visible_y = visible_points[:, 1]
             height_pixels = float(visible_y.max() - visible_y.min())
 
-            # Estimate depth using shoulder width
             left_shoulder_idx = 11
             right_shoulder_idx = 12
 
@@ -370,18 +331,14 @@ class RealtimeHeightEqualizer:
                 left_shoulder = landmarks_2d[left_shoulder_idx]
                 right_shoulder = landmarks_2d[right_shoulder_idx]
                 shoulder_width = float(np.linalg.norm(left_shoulder - right_shoulder))
-
-                # 3D depth (average of visible world landmarks)
                 depth_z = float(np.mean(landmarks_3d[visible_mask, 2]))
             else:
-                shoulder_width = height_pixels * 0.25  # Fallback estimate
-                depth_z = 2.0  # Default depth
+                shoulder_width = height_pixels * 0.25
+                depth_z = 2.0
 
-            # Estimate real height (normalized by depth-ish scale)
-            depth_scale = shoulder_width / 100.0  # Normalize to reasonable scale
+            depth_scale = shoulder_width / 100.0
             real_height = height_pixels / max(depth_scale, 0.1)
 
-            # Head position
             nose_idx = 0
             left_eye_idx = 2
             right_eye_idx = 5
@@ -420,39 +377,31 @@ class RealtimeHeightEqualizer:
 
         return people
 
-    # ---------------------------------------------------------- helpers (min/max)
+    # ---------------------------------------------------------- helpers
 
     def find_shortest_person(self, people: List[Person3D]) -> Optional[int]:
-        """Find the shortest person accounting for depth."""
         if not people:
             return None
-
         min_height = float("inf")
         shortest_idx = None
-
         for person in people:
             if person.real_height_estimate < min_height:
                 min_height = person.real_height_estimate
                 shortest_idx = person.index
-
         return shortest_idx
 
     def find_tallest_person(self, people: List[Person3D]) -> Optional[int]:
-        """Find the tallest person accounting for depth."""
         if not people:
             return None
-
         max_height = -float("inf")
         tallest_idx = None
-
         for person in people:
             if person.real_height_estimate > max_height:
                 max_height = person.real_height_estimate
                 tallest_idx = person.index
-
         return tallest_idx
 
-    # ------------------------------------------------------------- stretch logic
+    # ------------------------------------------------------------- stretch
 
     def stretch_person(
         self,
@@ -460,23 +409,14 @@ class RealtimeHeightEqualizer:
         person: Person3D,
         stretch_factor: float,
     ) -> ArrayU8:
-        """Stretch a person vertically, anchoring the feet and extending upwards.
-
-        This version:
-        - Uses the detected person bounding box only (no global warp).
-        - Anchors the feet (bottom of the bbox) so they stay in place.
-        - Extends the body upwards to increase apparent height.
-        - Fully overwrites the original person region inside the bbox to avoid
-          the "ghost" non-stretched body in the background.
-        """
+        """Stretch a person vertically, anchoring the feet and avoiding head cut-off."""
         if stretch_factor <= 1.0:
-            # Nothing to do if we're not actually making them taller
             return frame
 
         h, w = frame.shape[:2]
         output = frame.copy()
 
-        # Approximate person bounding box from visible landmarks
+        # Person bbox from visible landmarks
         visible_mask = person.visibility > 0.5
         if not np.any(visible_mask):
             return frame
@@ -495,29 +435,35 @@ class RealtimeHeightEqualizer:
         if roi_h <= 0 or roi_w <= 0:
             return frame
 
-        # How tall do we want them to look (in pixels)?
-        new_height = int(roi_h * stretch_factor)
-        new_height = max(roi_h + 1, min(new_height, h))  # at least a bit taller, not bigger than frame
+        # ---- NEW: clamp stretch so full stretched person fits on screen ----
+        bottom_y = y_max  # feet anchor
+        # maximum vertical factor so new_height <= bottom_y
+        max_factor_geom = (bottom_y - 1) / roi_h
+        max_factor_geom = max(1.0, max_factor_geom)
+        stretch_factor = float(min(stretch_factor, max_factor_geom))
+        # --------------------------------------------------------------------
 
-        # Vertically stretch the ROI
+        new_height = int(roi_h * stretch_factor)
+        new_height = max(roi_h + 1, min(new_height, h))
+
         stretched = cv2.resize(
             roi,
             (roi_w, new_height),
             interpolation=cv2.INTER_LINEAR,
         )
 
-        # Keep the feet fixed: align bottom of stretched ROI with bottom of original bbox
         bottom_y = y_max
-        dest_top = max(0, bottom_y - new_height)
+        dest_top = bottom_y - new_height
         dest_bottom = bottom_y
+        if dest_top < 0:
+            dest_top = 0
+            dest_bottom = new_height
         dest_h = dest_bottom - dest_top
         if dest_h <= 0:
             return frame
 
-        # Take the bottom 'dest_h' rows of the stretched person
         src = stretched[-dest_h:, :, :]
 
-        # Soft horizontal feather so edges blend into background
         edge_width = min(10, roi_w // 4)
         alpha = np.ones((dest_h, roi_w), dtype=np.float32)
         if edge_width > 0:
@@ -525,18 +471,15 @@ class RealtimeHeightEqualizer:
                 t = i / edge_width
                 alpha[:, i] *= t
                 alpha[:, -(i + 1)] *= t
-        alpha = alpha[..., None]  # (H, W, 1)
+        alpha = alpha[..., None]
 
-        # Destination patch from the current output frame
         dest_patch = output[dest_top:dest_bottom, x_min:x_max]
-
-        # Strongly favor the stretched person inside the bbox so no "ghost" remains
         blended = (src * alpha + dest_patch * (1.0 - alpha)).astype(np.uint8)
 
         output[dest_top:dest_bottom, x_min:x_max] = blended
         return output
 
-    # -------------------------------------------------------------- hats (3D)
+    # -------------------------------------------------------------- hats
 
     def add_3d_hat(
         self,
@@ -545,16 +488,9 @@ class RealtimeHeightEqualizer:
         height_gap: float,
         hat_index: Optional[int] = None,
     ) -> ArrayU8:
-        """Add a 3D hat with sane scaling and better vertical offset.
-
-        - Scales with head width and (softly) with the height gap.
-        - Applies a gentle depth factor.
-        - Pushes the hat slightly *above* the head so it no longer overlaps eyes.
-        """
         if not self.hat_models:
             return frame
 
-        # Use explicit index if given; otherwise use current_hat_index
         if hat_index is None:
             hat_index = self.current_hat_index
 
@@ -563,19 +499,15 @@ class RealtimeHeightEqualizer:
 
         base_h, base_w = hat.shape[:2]
 
-        # Reasonable scale based on head width and height gap
         height_gap = max(0.0, float(height_gap))
         scale_for_width = (person.head_width * 1.4) / max(base_w, 1)
         scale_for_gap = (0.7 * height_gap) / max(base_h, 1) if height_gap > 0 else 0.0
 
         scale = max(scale_for_width, scale_for_gap, 0.4)
 
-        # Depth scaling (clamped so it doesn't explode)
         depth_scale = 1.5 / max(person.depth_z, 0.6)
         depth_scale = float(np.clip(depth_scale, 0.7, 1.4))
         scale *= depth_scale
-
-        # Final clamp
         scale = float(np.clip(scale, 0.5, 1.6))
 
         new_w = max(10, int(base_w * scale))
@@ -583,12 +515,10 @@ class RealtimeHeightEqualizer:
 
         resized_hat = cv2.resize(hat, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
-        # Position hat: centered horizontally, pushed slightly above the head
         hat_h, hat_w = resized_hat.shape[:2]
         x_pos = int(person.head_center_x - hat_w // 2)
 
-        # Push the hat up by ~20% of its own height so it sits above the eyebrows
-        vertical_offset = int(0.2 * hat_h)
+        vertical_offset = int(0.2 * hat_h)  # push hat up a bit
         y_pos = int(person.head_top_y - hat_h - vertical_offset)
 
         output = self._overlay_rgba(output, resized_hat, (x_pos, y_pos))
@@ -600,11 +530,9 @@ class RealtimeHeightEqualizer:
         overlay: ArrayU8,
         top_left: Tuple[int, int],
     ) -> ArrayU8:
-        """Overlay RGBA image with alpha blending."""
         x, y = top_left
         h, w = overlay.shape[:2]
 
-        # Clip to frame boundaries
         x1 = max(0, x)
         y1 = max(0, y)
         x2 = min(base.shape[1], x + w)
@@ -613,7 +541,6 @@ class RealtimeHeightEqualizer:
         if x1 >= x2 or y1 >= y2:
             return base
 
-        # Corresponding overlay region
         ox1 = x1 - x
         oy1 = y1 - y
         ox2 = ox1 + (x2 - x1)
@@ -639,23 +566,19 @@ class RealtimeHeightEqualizer:
         shortest_idx: Optional[int],
         tallest_idx: Optional[int],
     ) -> ArrayU8:
-        """Draw debug overlays showing detections and measurements."""
         output = frame.copy()
 
         for person in people:
-            color = (0, 255, 0)  # Green default
-
+            color = (0, 255, 0)
             if person.index == shortest_idx:
-                color = (0, 0, 255)  # Red for shortest
+                color = (0, 0, 255)
             elif person.index == tallest_idx:
-                color = (255, 0, 0)  # Blue for tallest
+                color = (255, 0, 0)
 
-            # Draw keypoints
             for i, (x, y) in enumerate(person.landmarks_2d):
                 if person.visibility[i] > 0.5:
                     cv2.circle(output, (int(x), int(y)), 3, color, -1)
 
-            # Info text
             info_x = int(person.landmarks_2d[0, 0])
             info_y = int(person.landmarks_2d[0, 1]) - 30
 
@@ -668,7 +591,6 @@ class RealtimeHeightEqualizer:
                 color,
                 2,
             )
-
             cv2.putText(
                 output,
                 f"D:{person.depth_z:.2f}m",
@@ -689,7 +611,6 @@ class RealtimeHeightEqualizer:
         method: str = "hat",
         debug: bool = False,
     ) -> ArrayU8:
-        """Process a single frame."""
         timestamp_ms = int(self.total_frame_count * 33.33)
         people = self.detect_people_with_depth(frame, timestamp_ms)
 
@@ -708,24 +629,19 @@ class RealtimeHeightEqualizer:
         ):
             return frame
 
-        # Map from index -> person object
         idx_to_person = {p.index: p for p in people}
         shortest = idx_to_person[shortest_idx]
         tallest = idx_to_person[tallest_idx]
 
-        # Direct pixel height difference between tallest and shortest
         height_diff_pixels = max(
             0.0, float(tallest.height_pixels - shortest.height_pixels)
         )
 
-        # Apply equalization
         if method == "stretch":
-            # Stretch factor so shortest visually approaches tallest
             if shortest.height_pixels > 1.0:
                 base_factor = tallest.height_pixels / shortest.height_pixels
             else:
                 base_factor = 1.0
-            # Clamp so we don't overdo it
             stretch_factor = float(np.clip(base_factor, 1.0, 1.6))
             frame = self.stretch_person(frame, shortest, stretch_factor)
 
@@ -737,7 +653,6 @@ class RealtimeHeightEqualizer:
                 base_factor = tallest.height_pixels / shortest.height_pixels
             else:
                 base_factor = 1.0
-            # Softer stretch when also adding a hat
             stretch_factor = 1.0 + (base_factor - 1.0) * 0.5
             stretch_factor = float(np.clip(stretch_factor, 1.0, 1.4))
             frame = self.stretch_person(frame, shortest, stretch_factor)
@@ -751,7 +666,6 @@ class RealtimeHeightEqualizer:
     # ------------------------------------------------------------------- main
 
     def run(self, method: str = "hat", debug: bool = True):
-        """Run the real-time video loop."""
         if not self.start_camera():
             print("Failed to open camera!")
             return
@@ -779,15 +693,12 @@ class RealtimeHeightEqualizer:
 
                 processed = self.process_frame(frame, method, debug)
 
-                # FPS
                 current_time = time.time()
                 if current_time - self.last_time >= 1.0:
                     self.fps = self.frame_count / (current_time - self.last_time)
                     self.frame_count = 0
                     self.last_time = current_time
 
-                # Hat label
-                hat_label = ""
                 if len(self.hat_models) >= 3:
                     idx = self.current_hat_index % 3
                     hat_label = ["TOP", "PARTY", "CROWN"][idx]
@@ -840,7 +751,6 @@ class RealtimeHeightEqualizer:
             self.cleanup()
 
     def cleanup(self):
-        """Release resources."""
         if self.cap is not None:
             self.cap.release()
         cv2.destroyAllWindows()
@@ -881,7 +791,7 @@ def main():
         "--hat-style",
         choices=[s.value for s in HatStyle],
         default=HatStyle.TOP_HAT.value,
-        help="Which built-in hat to use when method includes hats.",
+        help="Built-in hat style",
     )
     parser.add_argument(
         "--debug",
