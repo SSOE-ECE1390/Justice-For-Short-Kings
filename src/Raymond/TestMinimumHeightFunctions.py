@@ -7,19 +7,19 @@ from MinimumHeightFunctions import (
     scaleToShortestPersonAndPaste,
 )
 def runMinHeightFunctionsSelector():
-    INPUT_IMAGE_PATH = "Images/image2.png"
-    BACKGROUND_IMAGE_PATH = "Background_Images/background_photo2.png"
+    INPUT_IMAGE_PATH = "Images/image1.jpg"
+    BACKGROUND_IMAGE_PATH = "Background_Images/background_image1.jpg"
 
     print("\nMINIMUM HEIGHT FUNCTIONS SELECTOR")
     choice = input ("Enter 1 for Crop To Shortest, or 2 for Scale To Shortest: ")
     print("-"*40)
     try:
         if choice == '1':
-            print("🚀 Running: Alignment Only (Inpainting) method...")
+            print("Running: Alignment Only (Inpainting) method...")
             cropToShortestPersonAndInpaint(INPUT_IMAGE_PATH)
 
         elif choice == '2':
-            print("🔬 Running: Scaling and Equalization (Final) method...")
+            print("Running: Scaling and Equalization (Final) method...")
             scaleToShortestPersonAndPaste(INPUT_IMAGE_PATH, BACKGROUND_IMAGE_PATH)
 
         else:
