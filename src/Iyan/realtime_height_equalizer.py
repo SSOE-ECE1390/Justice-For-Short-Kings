@@ -44,7 +44,7 @@ class RealtimeHeightEqualizer:
         hat_model_path: Optional[Path | str] = None,
         camera_index: int = 0,
         max_people: int = 5,
-        min_confidence: float = 0.5,
+        min_confidence: float = 0.4,
     ):
         self.pose_model_path = Path(pose_model_path)
         if not self.pose_model_path.exists():
@@ -234,92 +234,88 @@ class RealtimeHeightEqualizer:
                 [lm.x, lm.y, lm.z] for lm in world_landmarks
             ], dtype=np.float32)
             
-            visibility = np.array([lm.visibility for lm in norm_landmarks], dtype=np.float32)
+            # Visibility scores
+            visibility = np.array([
+                getattr(lm, 'visibility', 1.0) for lm in norm_landmarks
+            ], dtype=np.float32)
             
-            # Calculate depth (average Z coordinate of visible landmarks)
+            # Calculate height in pixels
             visible_mask = visibility > 0.5
             if not np.any(visible_mask):
                 continue
             
-            depth_z = np.mean(np.abs(landmarks_3d[visible_mask, 2]))
+            visible_y = landmarks_2d[visible_mask, 1]
+            height_pixels = float(visible_y.max() - visible_y.min())
             
-            # Calculate pixel height
-            valid_y = landmarks_2d[visible_mask, 1]
-            height_pixels = float(valid_y.max() - valid_y.min())
+            # Estimate depth using shoulder width
+            left_shoulder_idx = 11
+            right_shoulder_idx = 12
             
-            # Estimate real height using depth
-            # MediaPipe world landmarks are in meters, hip-to-head is roughly person's height
-            # Use shoulder/hip landmarks to estimate height in world coordinates
-            left_shoulder = 11
-            right_shoulder = 12
-            left_hip = 23
-            right_hip = 24
-            left_ankle = 27
-            right_ankle = 28
-            
-            # Calculate world-space height (meters)
-            height_landmarks = [left_shoulder, right_shoulder, left_hip, right_hip, 
-                              left_ankle, right_ankle]
-            valid_heights = [landmarks_3d[i, 1] for i in height_landmarks 
-                           if i < len(visibility) and visibility[i] > 0.5]
-            
-            if valid_heights:
-                world_height = max(valid_heights) - min(valid_heights)
-                real_height_estimate = abs(world_height)  # meters
+            if visibility[left_shoulder_idx] > 0.5 and visibility[right_shoulder_idx] > 0.5:
+                left_shoulder = landmarks_2d[left_shoulder_idx]
+                right_shoulder = landmarks_2d[right_shoulder_idx]
+                shoulder_width = np.linalg.norm(left_shoulder - right_shoulder)
+                
+                # Also use 3D depth (z coordinate in meters)
+                depth_z = float(np.mean(landmarks_3d[visible_mask, 2]))
             else:
-                real_height_estimate = height_pixels * (depth_z + 1.0) / 500.0
+                shoulder_width = height_pixels * 0.25  # Fallback estimate
+                depth_z = 2.0  # Default depth
             
-            # Get head information
+            # Estimate real height (normalized by depth)
+            # Larger shoulder width = closer to camera = divide by larger number to normalize
+            depth_scale = shoulder_width / 100.0  # Normalize to reasonable scale
+            real_height = height_pixels / max(depth_scale, 0.1)
+            
+            # Find head position
             nose_idx = 0
-            left_ear_idx = 7
-            right_ear_idx = 8
-            head_landmarks = [nose_idx, left_ear_idx, right_ear_idx]
+            left_eye_idx = 2
+            right_eye_idx = 5
             
-            head_points = [landmarks_2d[i] for i in head_landmarks 
-                          if i < len(visibility) and visibility[i] > 0.5]
+            head_y_coords = []
+            head_x_coords = []
+            for head_idx in [nose_idx, left_eye_idx, right_eye_idx]:
+                if visibility[head_idx] > 0.5:
+                    head_y_coords.append(landmarks_2d[head_idx, 1])
+                    head_x_coords.append(landmarks_2d[head_idx, 0])
             
-            if head_points:
-                head_points = np.array(head_points)
-                head_top_y = int(head_points[:, 1].min())
-                head_center_x = int(np.mean(head_points[:, 0]))
-                head_width = float(head_points[:, 0].max() - head_points[:, 0].min())
+            if head_y_coords:
+                head_top_y = int(min(head_y_coords))
+                head_center_x = int(np.mean(head_x_coords))
+                head_width = shoulder_width * 0.6
             else:
-                head_top_y = int(landmarks_2d[nose_idx, 1])
-                head_center_x = int(landmarks_2d[nose_idx, 0])
+                head_top_y = int(visible_y.min())
+                head_center_x = int(np.mean(landmarks_2d[visible_mask, 0]))
                 head_width = height_pixels * 0.15
             
-            # Calculate shoulder width for better hat placement
-            if visibility[left_shoulder] > 0.5 and visibility[right_shoulder] > 0.5:
-                shoulder_width = abs(landmarks_2d[left_shoulder, 0] - 
-                                   landmarks_2d[right_shoulder, 0])
-            else:
-                shoulder_width = head_width * 2.0
-            
-            person = Person3D(
+            people.append(Person3D(
                 index=idx,
                 landmarks_2d=landmarks_2d,
                 landmarks_3d=landmarks_3d,
                 visibility=visibility,
                 height_pixels=height_pixels,
                 depth_z=depth_z,
-                real_height_estimate=real_height_estimate,
+                real_height_estimate=real_height,
                 head_top_y=head_top_y,
                 head_center_x=head_center_x,
                 head_width=head_width,
                 shoulder_width=shoulder_width,
-            )
-            people.append(person)
+            ))
         
         return people
     
     def find_shortest_person(self, people: List[Person3D]) -> Optional[int]:
         """Find the shortest person accounting for depth."""
-        if len(people) < 2:
+        if not people:
             return None
         
-        # Use real height estimate (depth-corrected)
-        shortest_idx = min(range(len(people)), 
-                          key=lambda i: people[i].real_height_estimate)
+        min_height = float('inf')
+        shortest_idx = None
+        
+        for person in people:
+            if person.real_height_estimate < min_height:
+                min_height = person.real_height_estimate
+                shortest_idx = person.index
         
         return shortest_idx
     
@@ -328,99 +324,72 @@ class RealtimeHeightEqualizer:
         if not people:
             return None
         
-        tallest_idx = max(range(len(people)), 
-                         key=lambda i: people[i].real_height_estimate)
+        max_height = -float('inf')
+        tallest_idx = None
+        
+        for person in people:
+            if person.real_height_estimate > max_height:
+                max_height = person.real_height_estimate
+                tallest_idx = person.index
         
         return tallest_idx
     
-    def stretch_face(
+    def stretch_person(
         self, 
         frame: ArrayU8, 
         person: Person3D, 
         stretch_factor: float
     ) -> ArrayU8:
-        """Stretch a person's face/upper body vertically."""
-        nose_idx = 0
-        left_shoulder = 11
-        right_shoulder = 12
-        
-        # Define face region (nose to shoulders)
-        face_points = []
-        for idx in [nose_idx, left_shoulder, right_shoulder]:
-            if person.visibility[idx] > 0.5:
-                face_points.append(person.landmarks_2d[idx])
-        
-        if len(face_points) < 2:
-            return frame
-        
-        face_points = np.array(face_points)
-        
-        # Create bounding box for face/upper body
-        x_min = int(face_points[:, 0].min() - person.head_width)
-        x_max = int(face_points[:, 0].max() + person.head_width)
-        y_min = int(face_points[:, 1].min() - person.head_width)
-        y_max = int(face_points[:, 1].max() + person.head_width * 2)
-        
-        # Clamp to frame bounds
+        """
+        Stretch a person vertically using a natural piecewise approach.
+        This is simpler than full mask-based stretching but still looks good.
+        """
+        output = frame.copy()
         h, w = frame.shape[:2]
-        x_min = max(0, x_min)
-        x_max = min(w, x_max)
-        y_min = max(0, y_min)
-        y_max = min(h, y_max)
         
-        if x_max <= x_min or y_max <= y_min:
+        # Find bounding box of person
+        visible_mask = person.visibility > 0.5
+        if not np.any(visible_mask):
             return frame
         
-        # Extract region
-        region = frame[y_min:y_max, x_min:x_max].copy()
+        visible_points = person.landmarks_2d[visible_mask]
+        x_min = int(max(0, visible_points[:, 0].min() - 20))
+        x_max = int(min(w, visible_points[:, 0].max() + 20))
+        y_min = int(max(0, visible_points[:, 1].min() - 20))
+        y_max = int(min(h, visible_points[:, 1].max() + 20))
         
-        # Calculate stretched height
-        original_h = y_max - y_min
-        stretched_h = int(original_h * stretch_factor)
+        person_region = frame[y_min:y_max, x_min:x_max].copy()
         
-        if stretched_h <= original_h:
+        if person_region.size == 0:
             return frame
         
-        # Resize region
-        region_w = x_max - x_min
-        stretched_region = cv2.resize(
-            region, 
-            (region_w, stretched_h), 
-            interpolation=cv2.INTER_CUBIC
+        # Apply stretch
+        new_height = int(person_region.shape[0] * stretch_factor)
+        stretched = cv2.resize(
+            person_region,
+            (person_region.shape[1], new_height),
+            interpolation=cv2.INTER_LINEAR
         )
         
-        # Create output frame
-        output = frame.copy()
+        # Blend back with simple mask
+        blend_height = min(new_height, h - y_min)
         
-        # Calculate placement (anchor at bottom of original region)
-        new_y_min = y_max - stretched_h
-        new_y_max = y_max
+        # Create soft edge mask
+        mask = np.ones((blend_height, x_max - x_min), dtype=np.float32)
+        edge_width = min(10, (x_max - x_min) // 4)
         
-        # Clamp again
-        if new_y_min < 0:
-            trim = -new_y_min
-            stretched_region = stretched_region[trim:, :]
-            new_y_min = 0
+        for i in range(edge_width):
+            alpha = i / edge_width
+            mask[:, i] *= alpha
+            mask[:, -(i+1)] *= alpha
         
-        if new_y_max > h:
-            trim = new_y_max - h
-            stretched_region = stretched_region[:-trim, :]
-            new_y_max = h
+        mask = mask[:, :, None]
         
-        # Blend with feathered edges for smooth transition
-        blend_size = min(20, (new_y_max - new_y_min) // 4)
-        
-        # Top feather
-        for i in range(blend_size):
-            alpha = i / blend_size
-            output[new_y_min + i, x_min:x_max] = (
-                alpha * stretched_region[i] + 
-                (1 - alpha) * output[new_y_min + i, x_min:x_max]
-            ).astype(np.uint8)
-        
-        # Middle (full replacement)
-        output[new_y_min + blend_size:new_y_max, x_min:x_max] = \
-            stretched_region[blend_size:, :]
+        # Blend
+        output[y_min:y_min+blend_height, x_min:x_max] = (
+            stretched[:blend_height] * mask +
+            output[y_min:y_min+blend_height, x_min:x_max] * (1 - mask)
+        ).astype(np.uint8)
         
         return output
     
@@ -428,79 +397,72 @@ class RealtimeHeightEqualizer:
         self, 
         frame: ArrayU8, 
         person: Person3D, 
-        height_diff: float,
+        height_gap: float,
         hat_index: int = 0
     ) -> ArrayU8:
-        """Add a 3D hat that compensates for height difference."""
-        if height_diff < 1.0:
-            return frame
+        """Add a 3D hat with proper scaling for depth."""
+        output = frame.copy()
         
         # Select hat
         hat = self.hat_models[hat_index % len(self.hat_models)].copy()
         
-        # Scale hat based on person's size and depth
-        # Closer people (smaller depth_z) need larger hats
-        depth_scale = 1.0 / (person.depth_z + 0.5)
-        base_width = person.shoulder_width * 0.8
+        # Scale hat to fill height gap and match head width
+        scale_for_gap = height_gap / hat.shape[0]
+        scale_for_width = (person.head_width * 1.3) / hat.shape[1]
+        scale = max(scale_for_gap, scale_for_width, 0.3)
         
-        # Hat should be tall enough to compensate for height difference
-        # but also proportional to head width
-        target_height = max(height_diff * 0.8, base_width * 0.5)
+        # Apply depth scaling - farther people get smaller hats
+        depth_adjustment = 2.0 / max(person.depth_z, 0.5)
+        scale *= depth_adjustment
         
-        # Calculate scale factors
-        scale_x = base_width / hat.shape[1]
-        scale_y = target_height / hat.shape[0]
-        scale = max(scale_x, scale_y, 0.3) * depth_scale
+        new_w = max(10, int(hat.shape[1] * scale))
+        new_h = max(10, int(hat.shape[0] * scale))
         
-        # Resize hat
-        new_w = max(1, int(hat.shape[1] * scale))
-        new_h = max(1, int(hat.shape[0] * scale))
         resized_hat = cv2.resize(hat, (new_w, new_h), interpolation=cv2.INTER_AREA)
         
-        # Calculate position
+        # Position hat on head
         hat_h, hat_w = resized_hat.shape[:2]
-        x = person.head_center_x - hat_w // 2
-        y = person.head_top_y - hat_h
+        x_pos = person.head_center_x - hat_w // 2
+        y_pos = person.head_top_y - hat_h
         
-        # Overlay hat with alpha blending
-        output = self._overlay_rgba(frame, resized_hat, (x, y))
+        # Overlay with alpha blending
+        output = self._overlay_rgba(output, resized_hat, (x_pos, y_pos))
         
         return output
     
     def _overlay_rgba(
         self, 
-        frame: ArrayU8, 
+        base: ArrayU8, 
         overlay: ArrayU8, 
-        pos: Tuple[int, int]
+        top_left: Tuple[int, int]
     ) -> ArrayU8:
-        """Overlay RGBA image onto BGR frame."""
-        x, y = pos
-        h, w = frame.shape[:2]
-        oh, ow = overlay.shape[:2]
+        """Overlay RGBA image with alpha blending."""
+        x, y = top_left
+        h, w = overlay.shape[:2]
         
-        # Calculate valid region
+        # Clip to frame boundaries
         x1 = max(0, x)
         y1 = max(0, y)
-        x2 = min(w, x + ow)
-        y2 = min(h, y + oh)
+        x2 = min(base.shape[1], x + w)
+        y2 = min(base.shape[0], y + h)
         
         if x1 >= x2 or y1 >= y2:
-            return frame
+            return base
         
-        # Calculate overlay region
+        # Corresponding overlay region
         ox1 = x1 - x
         oy1 = y1 - y
         ox2 = ox1 + (x2 - x1)
         oy2 = oy1 + (y2 - y1)
         
-        # Extract regions
-        output = frame.copy()
-        roi = output[y1:y2, x1:x2]
         overlay_rgb = overlay[oy1:oy2, ox1:ox2, :3]
-        alpha = overlay[oy1:oy2, ox1:ox2, 3:4] / 255.0
+        alpha = (overlay[oy1:oy2, ox1:ox2, 3:4] / 255.0)
+        
+        roi = base[y1:y2, x1:x2]
         
         # Blend
         blended = (overlay_rgb * alpha + roi * (1 - alpha)).astype(np.uint8)
+        output = base.copy()
         output[y1:y2, x1:x2] = blended
         
         return output
@@ -534,7 +496,7 @@ class RealtimeHeightEqualizer:
             
             cv2.putText(
                 output,
-                f"P{person.index} H:{person.real_height_estimate:.2f}m",
+                f"P{person.index} H:{person.real_height_estimate:.2f}",
                 (info_x, info_y),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.5,
@@ -575,36 +537,34 @@ class RealtimeHeightEqualizer:
         shortest_idx = self.find_shortest_person(people)
         tallest_idx = self.find_tallest_person(people)
         
-        if shortest_idx is None or tallest_idx is None:
+        if shortest_idx is None or tallest_idx is None or shortest_idx == tallest_idx:
             return frame
         
         shortest = people[shortest_idx]
         tallest = people[tallest_idx]
         
-        # Calculate height difference in pixels
-        # Need to adjust for depth - closer people appear larger
-        height_diff_pixels = tallest.height_pixels - shortest.height_pixels
-        
-        # Adjust for depth difference
-        depth_ratio = tallest.depth_z / (shortest.depth_z + 0.001)
-        adjusted_diff = height_diff_pixels / depth_ratio
+        # Calculate height difference accounting for depth
+        height_diff_real = tallest.real_height_estimate - shortest.real_height_estimate
+        height_diff_pixels = height_diff_real * (shortest.shoulder_width / 100.0)
         
         # Apply equalization
         if method == "stretch":
-            stretch_factor = 1.0 + (adjusted_diff / shortest.height_pixels) * 0.5
-            frame = self.stretch_face(frame, shortest, stretch_factor)
+            stretch_factor = 1.0 + (height_diff_pixels / shortest.height_pixels) * 0.6
+            stretch_factor = min(stretch_factor, 1.5)  # Cap at 1.5x
+            frame = self.stretch_person(frame, shortest, stretch_factor)
         
         elif method == "hat":
             # Cycle through hat designs based on time
             hat_index = (self.frame_count // 30) % len(self.hat_models)
-            frame = self.add_3d_hat(frame, shortest, abs(adjusted_diff), hat_index)
+            frame = self.add_3d_hat(frame, shortest, abs(height_diff_pixels), hat_index)
         
         elif method == "both":
             # Stretch a bit and add a smaller hat
-            stretch_factor = 1.0 + (adjusted_diff / shortest.height_pixels) * 0.3
-            frame = self.stretch_face(frame, shortest, stretch_factor)
+            stretch_factor = 1.0 + (height_diff_pixels / shortest.height_pixels) * 0.3
+            stretch_factor = min(stretch_factor, 1.3)
+            frame = self.stretch_person(frame, shortest, stretch_factor)
             hat_index = (self.frame_count // 30) % len(self.hat_models)
-            frame = self.add_3d_hat(frame, shortest, abs(adjusted_diff) * 0.5, hat_index)
+            frame = self.add_3d_hat(frame, shortest, abs(height_diff_pixels) * 0.5, hat_index)
         
         # Draw debug info if requested
         if debug:
@@ -666,12 +626,16 @@ class RealtimeHeightEqualizer:
                     break
                 elif key == ord('h'):
                     method = "hat"
+                    print(f"Switched to: {method}")
                 elif key == ord('s'):
                     method = "stretch"
+                    print(f"Switched to: {method}")
                 elif key == ord('b'):
                     method = "both"
+                    print(f"Switched to: {method}")
                 elif key == ord('d'):
                     debug = not debug
+                    print(f"Debug: {'ON' if debug else 'OFF'}")
         
         finally:
             self.cleanup()
