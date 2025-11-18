@@ -1,27 +1,7 @@
 from __future__ import annotations
 
-"""
-Static image height equalizer for "Justice for Short Kings".
-
-Design goals
-------------
-1. Detect all people in the image with MediaPipe Pose (Tasks API).
-2. Decide who is visually shortest / tallest in the frame.
-   - For group photos where everyone stands roughly in one row, we use
-     pixel height as the primary signal, which matches human perception.
-3. Give the shortest person an option:
-   - "stretch": scale them up in a *natural* way (no melted faces),
-   - "hat" / "accessory": add a hat that makes their apparent height
-     match the tallest person,
-   - "both": small stretch + hat.
-4. Make the stretching look clean by:
-   - extracting a segmentation-based sprite of the person,
-   - inpainting the original person out of the background,
-   - re-compositing a uniformly scaled sprite back in.
-"""
-
 from dataclasses import dataclass
-from enum import IntEnum
+from enum import IntEnum, Enum
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
@@ -198,16 +178,24 @@ class HeightAdjustmentResult:
     applied: bool
 
 
+class AccessoryStyle(str, Enum):
+    TOP_HAT = "top_hat"
+    PARTY_HAT = "party_hat"
+    CROWN = "crown"
+
+
 class HeightEqualizer:
-    """Static-image equalizer for shortest/tallest people in a photo."""
+    """Detects people in an image and equalizes the shortest person's height."""
 
     def __init__(
         self,
         pose_model_path: Path | str,
-        accessory_path: Optional[Path | str] = None,
         *,
-        max_people: int = 10,
-        min_confidence: float = 0.3,
+        accessory_path: Optional[Path | str] = None,
+        accessory_style: str | AccessoryStyle = "top_hat",
+        max_people: int = 6,
+        min_confidence: float = 0.2,  # LOWERED from 0.3
+        segmentation_threshold: float = 0.5,
     ) -> None:
         pose_model_path = Path(pose_model_path)
         if not pose_model_path.exists():
@@ -223,6 +211,16 @@ class HeightEqualizer:
             min_tracking_confidence=min_confidence,
             output_segmentation_masks=True,
         )
+
+        # Normalize accessory style
+        if isinstance(accessory_style, str):
+            try:
+                self._accessory_style = AccessoryStyle(accessory_style)
+            except ValueError:
+                self._accessory_style = AccessoryStyle.TOP_HAT
+        else:
+            self._accessory_style = accessory_style
+
         self._landmarker = vision.PoseLandmarker.create_from_options(options)
 
         self._accessory_rgba = self._load_accessory(accessory_path)
@@ -422,7 +420,6 @@ class HeightEqualizer:
         full = np.maximum(full, rect_mask)
         return full
 
-
     def _extract_sprite(self, image_bgr: ArrayU8, mask_full: ArrayU8):
         """Extract the tight sprite (image crop + mask crop) for a single person."""
         ys, xs = np.where(mask_full > 0)
@@ -445,16 +442,15 @@ class HeightEqualizer:
         target_height_px: float,
     ) -> ArrayU8:
         """
-        More natural stretching:
-
-        1) Build a segmentation-based sprite of the person.
-        2) Inpaint the original person out of the background.
-        3) Uniformly scale the sprite (with a small width increase).
-        4) Re-composite it anchored at the feet.
+        Stretch the person so that their *body height* (head→feet) in pixels
+        matches `target_height_px`, while:
+          - keeping feet fixed in place,
+          - keeping the whole head inside the frame,
+          - and softly blending into the background.
         """
         frame_h, frame_w, _ = image_bgr.shape
 
-        # Full-frame mask for this person (includes head/feet)
+        # Full-frame mask for this person (includes head + padding above)
         mask_full = self._build_person_mask_full(person)
         sprite, mask_crop, bbox = self._extract_sprite(image_bgr, mask_full)
         if sprite is None:
@@ -464,23 +460,29 @@ class HeightEqualizer:
         if sprite_h <= 1 or sprite_w <= 1:
             return image_bgr
 
-        current_height = float(sprite_h)
+        # --- use *body* height, not sprite height, for scale calculation
+        body_height = float(person.height_px)          # head→feet
         desired_height = float(target_height_px)
 
-        # Requested vertical scale
-        scale_h = max(1.0, desired_height / current_height)
+        if body_height <= 1.0:
+            return image_bgr
 
-        # --- HARD CAP: don't let head go off-screen
-        # Maximum height we can fit while keeping feet fixed is the
-        # distance from the feet to the top of the frame.
+        # requested vertical scale from body height
+        requested_scale = desired_height / body_height
+        requested_scale = max(1.0, requested_scale)
+
+        # Feet y-position in the frame
         foot_y = person.feet_bottom()
         if foot_y is None:
             foot_y = bbox.bottom
-        max_height_by_frame = max(20.0, float(foot_y))  # pixels from top to feet
-        max_scale_frame = max_height_by_frame / current_height
 
-        # Keep scale within both "requested" and "frame" bounds
-        scale_h = float(np.clip(scale_h, 1.0, max_scale_frame * 0.98))
+        # Maximum scale before the head would go out of frame:
+        # at scale S, body height becomes S * body_height, and
+        # head_y' = foot_y - S * body_height must stay >= 0.
+        max_scale_frame = float(foot_y) / body_height
+        max_scale_frame = max(1.0, max_scale_frame)
+
+        scale_h = float(np.clip(requested_scale, 1.0, max_scale_frame * 0.98))
 
         # Small width growth so they don't look squashed
         scale_w = 1.0 + (scale_h - 1.0) * 0.3
@@ -495,19 +497,19 @@ class HeightEqualizer:
             mask_crop, (new_w, new_h), interpolation=cv2.INTER_LINEAR
         )
 
-        # Inpaint the original person out of the background once
+        # Inpaint original person out of background
         bg = cv2.inpaint(image_bgr, mask_full, 3, cv2.INPAINT_TELEA)
 
-        # Anchor at feet (same vertical foot position)
+        # Anchor at feet
         new_bottom = int(np.clip(foot_y, 0, frame_h - 1))
         new_top = new_bottom - new_h
 
-        # Horizontal position: center over original bbox center
+        # Horizontal center over original bbox center
         center_x = (bbox.left + bbox.right) // 2
         new_left = center_x - new_w // 2
         new_right = new_left + new_w
 
-        # Clip sprite and compute source indices
+        # Clip to frame
         x1 = max(0, new_left)
         y1 = max(0, new_top)
         x2 = min(frame_w, new_right)
@@ -523,7 +525,7 @@ class HeightEqualizer:
         sprite_crop = sprite_resized[sy1:sy2, sx1:sx2]
         mask_crop2 = mask_resized[sy1:sy2, sx1:sx2]
 
-        # --- Feather the mask edges so it "diffuses" into background
+        # Feather the mask edges so it diffuses into the background
         alpha = mask_crop2.astype(np.float32) / 255.0
         alpha = cv2.GaussianBlur(alpha, (0, 0), sigmaX=3, sigmaY=3)
         alpha = np.clip(alpha, 0.0, 1.0)[..., None]
@@ -611,31 +613,163 @@ class HeightEqualizer:
     # --------------------------------------------------------- accessories
 
     def _generate_default_hat(self) -> ArrayU8:
-        width, height = 160, 120
+        """Generate one of several built-in accessories."""
+        if self._accessory_style == AccessoryStyle.TOP_HAT:
+            return self._generate_top_hat()
+        elif self._accessory_style == AccessoryStyle.PARTY_HAT:
+            return self._generate_party_hat()
+        elif self._accessory_style == AccessoryStyle.CROWN:
+            return self._generate_crown()
+        # Fallback
+        return self._generate_top_hat()
+
+    def _generate_top_hat(self) -> ArrayU8:
+        width, height = 220, 140
         hat = np.zeros((height, width, 4), dtype=np.uint8)
 
-        top_h = int(height * 0.6)
-        cv2.rectangle(
-            hat,
-            (int(width * 0.2), 0),
-            (int(width * 0.8), top_h),
-            (30, 30, 30, 255),
-            thickness=-1,
+        brim_height = int(height * 0.3)
+        crown_height = height - brim_height
+
+        brim_color = (30, 30, 30)
+        crown_color = (45, 45, 45)
+        band_color = (70, 70, 160)
+
+        # RGB
+        hat[:crown_height, width // 4 : width * 3 // 4, :3] = crown_color
+        hat[crown_height:, :, :3] = brim_color
+        band_top = crown_height // 2
+        band_bottom = band_top + max(4, crown_height // 6)
+        hat[band_top:band_bottom, width // 4 : width * 3 // 4, :3] = band_color
+
+        # Alpha (shape)
+        alpha = np.zeros((height, width), dtype=np.uint8)
+        cv2.rectangle(alpha, (width // 4, 0), (width * 3 // 4, crown_height), 220, -1)
+        cv2.rectangle(alpha, (0, crown_height), (width, height), 200, -1)
+        hat[..., 3] = alpha
+        return hat
+
+    def _generate_party_hat(self) -> ArrayU8:
+        width, height = 220, 260
+
+        # Build RGB and alpha separately to avoid slice issues with OpenCV.
+        rgb = np.zeros((height, width, 3), dtype=np.uint8)
+        alpha = np.zeros((height, width), dtype=np.uint8)
+
+        # Triangle mask (main cone)
+        base_y = height - 40
+        apex_y = 10
+        pts = np.array(
+            [
+                [width // 2, apex_y],
+                [20, base_y],
+                [width - 20, base_y],
+            ],
+            np.int32,
         )
-        cv2.rectangle(
-            hat,
-            (0, top_h - 8),
-            (width, height),
-            (20, 20, 20, 255),
-            thickness=-1,
-        )
-        cv2.rectangle(
-            hat,
-            (int(width * 0.22), int(top_h * 0.35)),
-            (int(width * 0.78), int(top_h * 0.5)),
-            (220, 60, 160, 255),
-            thickness=-1,
-        )
+
+        # Triangle mask into alpha
+        cv2.fillConvexPoly(alpha, pts, 255)
+
+        # Stripes across the cone (draw full-width, then mask with alpha)
+        stripe_colors = [
+            (255, 200, 200),
+            (230, 170, 230),
+            (200, 180, 255),
+            (200, 220, 255),
+            (200, 255, 220),
+            (240, 240, 180),
+            (250, 220, 140),
+        ]
+        stripe_height = max(3, (base_y - apex_y) // len(stripe_colors))
+
+        stripes_rgb = np.zeros_like(rgb)
+        for i, color in enumerate(stripe_colors):
+            y1 = base_y - (i + 1) * stripe_height
+            y0 = base_y - i * stripe_height
+            y1 = max(apex_y, y1)
+            y0 = max(apex_y, y0)
+            cv2.rectangle(
+                stripes_rgb,
+                (0, y1),
+                (width - 1, y0),
+                color,
+                thickness=-1,
+            )
+
+        # Keep stripes only inside the triangle mask
+        mask_bool = alpha > 0
+        rgb[mask_bool] = stripes_rgb[mask_bool]
+
+        # Pom-pom at the top (circle into both rgb + alpha)
+        pom_color = (210, 120, 255)
+        pom_center = (width // 2, apex_y)
+        pom_radius = 10
+
+        cv2.circle(alpha, pom_center, pom_radius, 255, -1)
+        cv2.circle(rgb, pom_center, pom_radius, pom_color, -1)
+
+        # Stack into RGBA
+        hat = np.dstack([rgb, alpha])
+        return hat
+
+
+    def _generate_crown(self) -> ArrayU8:
+        width, height = 260, 160
+
+        # Separate RGB and alpha, then stack into RGBA at the end.
+        rgb = np.zeros((height, width, 3), dtype=np.uint8)
+        alpha = np.zeros((height, width), dtype=np.uint8)
+
+        base_top = int(height * 0.55)
+        base_color = (0, 240, 255)  # bright cyan
+
+        # Base rectangle (RGB + alpha)
+        rgb[base_top:height, :, :] = base_color
+        cv2.rectangle(alpha, (0, base_top), (width - 1, height - 1), 255, -1)
+
+        # Triangular spikes
+        spike_count = 5
+        spacing = width // (spike_count + 1)
+        spike_width = int(spacing * 0.8)
+        spike_height = int(height * 0.55)
+
+        for i in range(spike_count):
+            center_x = (i + 1) * spacing
+            left = center_x - spike_width // 2
+            right = center_x + spike_width // 2
+            top = base_top - spike_height
+
+            pts = np.array(
+                [
+                    [center_x, top],
+                    [left, base_top],
+                    [right, base_top],
+                ],
+                np.int32,
+            )
+
+            # Draw spike shape into both alpha and RGB
+            cv2.fillConvexPoly(alpha, pts, 255)
+            cv2.fillConvexPoly(rgb, pts, base_color)
+
+        # Jewels on each spike (RGB + alpha circles)
+        jewel_colors = [
+            (0, 0, 255),
+            (0, 255, 0),
+            (255, 0, 0),
+            (0, 255, 255),
+            (255, 255, 0),
+        ]
+        for i in range(spike_count):
+            center_x = (i + 1) * spacing
+            jewel_y = base_top - spike_height // 2
+            color = jewel_colors[i % len(jewel_colors)]
+
+            cv2.circle(alpha, (center_x, jewel_y), 7, 255, -1)
+            cv2.circle(rgb, (center_x, jewel_y), 7, color, -1)
+
+        # Stack into RGBA
+        hat = np.dstack([rgb, alpha])
         return hat
 
     def _load_accessory(self, accessory_path: Optional[Path | str]) -> Optional[ArrayU8]:

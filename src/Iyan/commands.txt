@@ -1,2 +1,3 @@
 1) Static: python -m Iyan.demo_v1 Iyan/images/img1.jpg Iyan/output/img1_stretch.jpg --model Iyan/assets/pose_landmarker_full.task --method stretch
 2) Live: python Iyan/realtime_height_equalizer.py --model Iyan/assets/pose_landmarker_full.task
+3) python -m Iyan.demo_v1 Iyan/images/img1.jpg Iyan/output/img1_party_hat.jpg --model Iyan/assets/pose_landmarker_full.task --method accessory --accessory-style party_hat

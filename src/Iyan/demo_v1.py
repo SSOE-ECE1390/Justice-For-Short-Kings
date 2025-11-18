@@ -5,78 +5,86 @@ from pathlib import Path
 
 import cv2
 
-from .height_equalizer import HeightEqualizer
+from .height_equalizer import HeightEqualizer, AccessoryStyle
 
 
-def build_arg_parser() -> argparse.ArgumentParser:
+def _build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Justice-for-Short-Kings – static image demo.\n"
-            "1) Detect everyone in the photo.\n"
-            "2) Find the depth-aware shortest and tallest person.\n"
-            "3) Either stretch the shortest or give them a height-equalizing hat."
+            "Equalize the height of the shortest person in a photo so they match "
+            "another person."
         )
     )
-    parser.add_argument("input", type=Path, help="Input image path.")
-    parser.add_argument("output", type=Path, help="Output image path.")
+    parser.add_argument("image", type=Path, help="Path to the input photo.")
+    parser.add_argument(
+        "output", type=Path, help="Where to store the adjusted image output."
+    )
     parser.add_argument(
         "--model",
         type=Path,
         required=True,
-        help="MediaPipe pose_landmarker_*.task model file.",
+        help="Path to the MediaPipe pose landmarker .task file.",
     )
     parser.add_argument(
         "--method",
-        choices=["stretch", "accessory", "hat", "both"],
+        choices=("stretch", "accessory", "hat", "both"),
         default="stretch",
-        help="How to help the shortest king.",
-    )
-    parser.add_argument(
-        "--accessory",
-        type=Path,
-        default=None,
-        help="Optional RGBA PNG for a custom hat/accessory.",
-    )
-    parser.add_argument(
-        "--shortest-index",
-        type=int,
-        default=None,
         help=(
-            "Override automatic shortest-person detection "
-            "and force this person index (0-based) to be modified."
+            "How to equalize the shortest person. "
+            "'stretch' scales them up, "
+            "'accessory' / 'hat' adds an accessory, "
+            "'both' does a small stretch plus an accessory."
         ),
     )
     parser.add_argument(
         "--reference-index",
         type=int,
         default=None,
+        help="Optional index of the person whose height should be matched.",
+    )
+    parser.add_argument(
+        "--shortest-index",
+        type=int,
+        default=None,
+        help="Optional override for who should be treated as the shortest person.",
+    )
+    parser.add_argument(
+        "--accessory",
+        type=Path,
+        default=None,
+        help="Optional path to a transparent PNG accessory for the accessory method.",
+    )
+    parser.add_argument(
+        "--accessory-style",
+        type=str,
+        choices=[s.value for s in AccessoryStyle],
+        default=AccessoryStyle.TOP_HAT.value,
         help=(
-            "Override automatic tallest-person detection "
-            "and use this person index (0-based) as the reference."
+            "Built-in accessory style to use when no custom PNG is given. "
+            "Choices: " + ", ".join(s.value for s in AccessoryStyle)
         ),
     )
     return parser
 
 
 def main() -> None:
-    parser = build_arg_parser()
-    args = parser.parse_args()
-
-    image = cv2.imread(str(args.input), cv2.IMREAD_COLOR)
+    args = _build_argument_parser().parse_args()
+    image = cv2.imread(str(args.image), cv2.IMREAD_COLOR)
     if image is None:
-        raise SystemExit(f"Could not read image: {args.input}")
+        raise FileNotFoundError(f"Unable to load image: {args.image}")
 
     equalizer = HeightEqualizer(
         pose_model_path=args.model,
         accessory_path=args.accessory,
+        accessory_style=args.accessory_style,
     )
 
     try:
         result = equalizer.equalize(
             image,
             method=args.method,
-            shortest_index=args.shortest_index,
             reference_index=args.reference_index,
+            shortest_index=args.shortest_index,
         )
     finally:
         equalizer.close()
@@ -84,27 +92,13 @@ def main() -> None:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(args.output), result.output_image)
 
-    if not result.measurements:
-        print("No people detected – saved original image with no changes.")
-        return
-
-    print(f"Detected {len(result.measurements)} person(s).")
-    print(
-        f"Shortest index: {result.shortest_index}, "
-        f"tallest index: {result.reference_index}"
-    )
-
     if result.applied:
         print(
-            f"Applied '{result.method}' to person #{result.shortest_index} "
-            f"to match person #{result.reference_index}. "
-            f"Output saved to {args.output}."
+            f"Equalized person #{result.shortest_index} to match #{result.reference_index} "
+            f"using '{result.method}'. Saved to {args.output}."
         )
     else:
-        print(
-            "Heights already comparable or indices identical – "
-            f"no visual change applied. Saved {args.output}."
-        )
+        print("All detected people already have comparable heights. No changes made.")
 
 
 if __name__ == "__main__":
