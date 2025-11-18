@@ -66,7 +66,6 @@ class RealtimeHeightEqualizer:
             num_poses=max_people,
             min_pose_detection_confidence=min_confidence,
             min_pose_presence_confidence=min_confidence,
-            output_segmentation_masks=True,
         )
 
         self.pose_landmarker = vision.PoseLandmarker.create_from_options(options)
@@ -351,12 +350,13 @@ class RealtimeHeightEqualizer:
                 dtype=np.float32,
             )
 
-            # Height in pixels
+            # Height in pixels based on visible landmarks
             visible_mask = visibility > 0.5
             if not np.any(visible_mask):
                 continue
 
-            visible_y = landmarks_2d[visible_mask, 1]
+            visible_points = landmarks_2d[visible_mask]
+            visible_y = visible_points[:, 1]
             height_pixels = float(visible_y.max() - visible_y.min())
 
             # Estimate depth using shoulder width
@@ -371,7 +371,7 @@ class RealtimeHeightEqualizer:
                 right_shoulder = landmarks_2d[right_shoulder_idx]
                 shoulder_width = float(np.linalg.norm(left_shoulder - right_shoulder))
 
-                # 3D depth
+                # 3D depth (average of visible world landmarks)
                 depth_z = float(np.mean(landmarks_3d[visible_mask, 2]))
             else:
                 shoulder_width = height_pixels * 0.25  # Fallback estimate
@@ -460,13 +460,23 @@ class RealtimeHeightEqualizer:
         person: Person3D,
         stretch_factor: float,
     ) -> ArrayU8:
-        """
-        Stretch a person vertically using a natural piecewise approach.
-        Simpler than full mask-based stretching but still looks decent.
-        """
-        output = frame.copy()
-        h, w = frame.shape[:2]
+        """Stretch a person vertically, anchoring the feet and extending upwards.
 
+        This version:
+        - Uses the detected person bounding box only (no global warp).
+        - Anchors the feet (bottom of the bbox) so they stay in place.
+        - Extends the body upwards to increase apparent height.
+        - Fully overwrites the original person region inside the bbox to avoid
+          the "ghost" non-stretched body in the background.
+        """
+        if stretch_factor <= 1.0:
+            # Nothing to do if we're not actually making them taller
+            return frame
+
+        h, w = frame.shape[:2]
+        output = frame.copy()
+
+        # Approximate person bounding box from visible landmarks
         visible_mask = person.visibility > 0.5
         if not np.any(visible_mask):
             return frame
@@ -477,35 +487,53 @@ class RealtimeHeightEqualizer:
         y_min = int(max(0, visible_points[:, 1].min() - 20))
         y_max = int(min(h, visible_points[:, 1].max() + 20))
 
-        person_region = frame[y_min:y_max, x_min:x_max].copy()
-        if person_region.size == 0:
+        if x_max <= x_min or y_max <= y_min:
             return frame
 
-        new_height = int(person_region.shape[0] * stretch_factor)
+        roi = frame[y_min:y_max, x_min:x_max]
+        roi_h, roi_w = roi.shape[:2]
+        if roi_h <= 0 or roi_w <= 0:
+            return frame
+
+        # How tall do we want them to look (in pixels)?
+        new_height = int(roi_h * stretch_factor)
+        new_height = max(roi_h + 1, min(new_height, h))  # at least a bit taller, not bigger than frame
+
+        # Vertically stretch the ROI
         stretched = cv2.resize(
-            person_region,
-            (person_region.shape[1], new_height),
+            roi,
+            (roi_w, new_height),
             interpolation=cv2.INTER_LINEAR,
         )
 
-        blend_height = min(new_height, h - y_min)
+        # Keep the feet fixed: align bottom of stretched ROI with bottom of original bbox
+        bottom_y = y_max
+        dest_top = max(0, bottom_y - new_height)
+        dest_bottom = bottom_y
+        dest_h = dest_bottom - dest_top
+        if dest_h <= 0:
+            return frame
 
-        # Soft edge mask horizontally
-        mask = np.ones((blend_height, x_max - x_min), dtype=np.float32)
-        edge_width = min(10, (x_max - x_min) // 4)
+        # Take the bottom 'dest_h' rows of the stretched person
+        src = stretched[-dest_h:, :, :]
 
-        for i in range(edge_width):
-            alpha = i / edge_width
-            mask[:, i] *= alpha
-            mask[:, -(i + 1)] *= alpha
+        # Soft horizontal feather so edges blend into background
+        edge_width = min(10, roi_w // 4)
+        alpha = np.ones((dest_h, roi_w), dtype=np.float32)
+        if edge_width > 0:
+            for i in range(edge_width):
+                t = i / edge_width
+                alpha[:, i] *= t
+                alpha[:, -(i + 1)] *= t
+        alpha = alpha[..., None]  # (H, W, 1)
 
-        mask = mask[:, :, None]
+        # Destination patch from the current output frame
+        dest_patch = output[dest_top:dest_bottom, x_min:x_max]
 
-        output[y_min : y_min + blend_height, x_min:x_max] = (
-            stretched[:blend_height] * mask
-            + output[y_min : y_min + blend_height, x_min:x_max] * (1 - mask)
-        ).astype(np.uint8)
+        # Strongly favor the stretched person inside the bbox so no "ghost" remains
+        blended = (src * alpha + dest_patch * (1.0 - alpha)).astype(np.uint8)
 
+        output[dest_top:dest_bottom, x_min:x_max] = blended
         return output
 
     # -------------------------------------------------------------- hats (3D)
@@ -517,7 +545,12 @@ class RealtimeHeightEqualizer:
         height_gap: float,
         hat_index: Optional[int] = None,
     ) -> ArrayU8:
-        """Add a 3D hat with proper scaling for depth."""
+        """Add a 3D hat with sane scaling and better vertical offset.
+
+        - Scales with head width and (softly) with the height gap.
+        - Applies a gentle depth factor.
+        - Pushes the hat slightly *above* the head so it no longer overlaps eyes.
+        """
         if not self.hat_models:
             return frame
 
@@ -526,29 +559,38 @@ class RealtimeHeightEqualizer:
             hat_index = self.current_hat_index
 
         hat = self.hat_models[hat_index % len(self.hat_models)].copy()
-
         output = frame.copy()
 
-        # Scale hat to fill height gap and match head width
-        scale_for_gap = height_gap / max(hat.shape[0], 1)
-        scale_for_width = (person.head_width * 1.3) / max(hat.shape[1], 1)
-        scale = max(scale_for_gap, scale_for_width, 0.3)
+        base_h, base_w = hat.shape[:2]
 
-        # Depth scaling - farther people get smaller hats
-        depth_adjustment = 2.0 / max(person.depth_z, 0.5)
-        scale *= depth_adjustment
+        # Reasonable scale based on head width and height gap
+        height_gap = max(0.0, float(height_gap))
+        scale_for_width = (person.head_width * 1.4) / max(base_w, 1)
+        scale_for_gap = (0.7 * height_gap) / max(base_h, 1) if height_gap > 0 else 0.0
 
-        new_w = max(10, int(hat.shape[1] * scale))
-        new_h = max(10, int(hat.shape[0] * scale))
+        scale = max(scale_for_width, scale_for_gap, 0.4)
+
+        # Depth scaling (clamped so it doesn't explode)
+        depth_scale = 1.5 / max(person.depth_z, 0.6)
+        depth_scale = float(np.clip(depth_scale, 0.7, 1.4))
+        scale *= depth_scale
+
+        # Final clamp
+        scale = float(np.clip(scale, 0.5, 1.6))
+
+        new_w = max(10, int(base_w * scale))
+        new_h = max(10, int(base_h * scale))
 
         resized_hat = cv2.resize(hat, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
-        # Position hat on head
+        # Position hat: centered horizontally, pushed slightly above the head
         hat_h, hat_w = resized_hat.shape[:2]
-        x_pos = person.head_center_x - hat_w // 2
-        y_pos = person.head_top_y - hat_h
+        x_pos = int(person.head_center_x - hat_w // 2)
 
-        # Overlay with alpha blending
+        # Push the hat up by ~20% of its own height so it sits above the eyebrows
+        vertical_offset = int(0.2 * hat_h)
+        y_pos = int(person.head_top_y - hat_h - vertical_offset)
+
         output = self._overlay_rgba(output, resized_hat, (x_pos, y_pos))
         return output
 
@@ -666,24 +708,38 @@ class RealtimeHeightEqualizer:
         ):
             return frame
 
-        shortest = people[shortest_idx]
-        tallest = people[tallest_idx]
+        # Map from index -> person object
+        idx_to_person = {p.index: p for p in people}
+        shortest = idx_to_person[shortest_idx]
+        tallest = idx_to_person[tallest_idx]
 
-        height_diff_real = tallest.real_height_estimate - shortest.real_height_estimate
-        height_diff_pixels = height_diff_real * (shortest.shoulder_width / 100.0)
+        # Direct pixel height difference between tallest and shortest
+        height_diff_pixels = max(
+            0.0, float(tallest.height_pixels - shortest.height_pixels)
+        )
 
         # Apply equalization
         if method == "stretch":
-            stretch_factor = 1.0 + (height_diff_pixels / shortest.height_pixels) * 0.6
-            stretch_factor = min(stretch_factor, 1.5)
+            # Stretch factor so shortest visually approaches tallest
+            if shortest.height_pixels > 1.0:
+                base_factor = tallest.height_pixels / shortest.height_pixels
+            else:
+                base_factor = 1.0
+            # Clamp so we don't overdo it
+            stretch_factor = float(np.clip(base_factor, 1.0, 1.6))
             frame = self.stretch_person(frame, shortest, stretch_factor)
 
         elif method == "hat":
             frame = self.add_3d_hat(frame, shortest, abs(height_diff_pixels))
 
         elif method == "both":
-            stretch_factor = 1.0 + (height_diff_pixels / shortest.height_pixels) * 0.3
-            stretch_factor = min(stretch_factor, 1.3)
+            if shortest.height_pixels > 1.0:
+                base_factor = tallest.height_pixels / shortest.height_pixels
+            else:
+                base_factor = 1.0
+            # Softer stretch when also adding a hat
+            stretch_factor = 1.0 + (base_factor - 1.0) * 0.5
+            stretch_factor = float(np.clip(stretch_factor, 1.0, 1.4))
             frame = self.stretch_person(frame, shortest, stretch_factor)
             frame = self.add_3d_hat(frame, shortest, abs(height_diff_pixels) * 0.5)
 
