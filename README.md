@@ -27,17 +27,20 @@ Team Members:
 The module under `src/Iyan` detects every visible person in a photo, finds the shortest one, and either stretches their upper body or adds a configurable accessory so they match a reference person's height.
 
 1. Download a MediaPipe pose landmarker model (e.g. `pose_landmarker_full.task` from the [MediaPipe release assets](https://developers.google.com/mediapipe/solutions/vision/pose_landmarker)).
-2. Run the helper script:
+2. Run the example helper scripts:
 
    ```
-   python -m src.Iyan.hi path/to/input.jpg path/to/output.jpg --model path/to/pose_landmarker_full.task --method accessory
+    1. Static: python -m Iyan.demo_v1 Iyan/images/img1.jpg Iyan/output/img1_stretch.jpg --model Iyan/assets/pose_landmarker_full.task --method stretch
+    2. Live: python Iyan/realtime_height_equalizer.py --model Iyan/assets/pose_landmarker_full.task
+    3. python -m Iyan.demo_v1 Iyan/images/img1.jpg Iyan/output/img1_party_hat.jpg --model Iyan/assets/pose_landmarker_full.task --method accessory --accessory-style party_hat
    ```
 
    - Use `--method stretch` to scale the shortest person's upper body.
-   - Supply `--reference-index` to pick who should be matched (defaults to the tallest).
-   - Optionally pass `--accessory path/to/hat.png` to use a custom transparent PNG.
+   - Use `--method hat` to scale a hat (of the users choice --> 1,2,3) to the shortest person's head.
+   - Optionally pass `--accessory-style party_hat` to use a custom hat (not necessary however).
 
-The core logic lives in `src/Iyan/height_equalizer.py` and can be imported elsewhere to plug into a GUI or pipeline.
+The core logic lives in `src/Iyan/height_equalizer.py` or `src/Iyan/_realtime_height_equalizer.py` and can be imported elsewhere to plug into a GUI or pipeline.
+(Also can use test suites `src/Iyan/demo_v1.py` or `src/Iyan/demo_v2.py`)
 
 ## File Descriptions
 This project contains a number of additional files that are used by GitHub to provide information and do tests on code.
