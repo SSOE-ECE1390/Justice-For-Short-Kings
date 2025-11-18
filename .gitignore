@@ -1,5 +1,6 @@
 # ignore ALL files in the .venc python directory
 .venv/
+.venv-Raymond
 .tox/
 .pytest_cache/
 .mypy_cache/
