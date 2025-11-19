@@ -12,8 +12,8 @@ mp_selfie = mp.solutions.selfie_segmentation
 
 # Constants
 HEAD_TOP_PADDING_FACTOR = 0.5
-TORSO_PADDING_HEIGHT_FACTOR = 3.5
-HORIZONTAL_PADDING_FACTOR = 1.0
+TORSO_PADDING_HEIGHT_FACTOR = 7
+HORIZONTAL_PADDING_FACTOR = 2.0
 NOSE_ALIGNMENT_Y_RATIO = 0.85
 
 # Function: CreateColorBackground
@@ -108,12 +108,16 @@ def analyzePersonHeight(originalImage, personData):
                     hipRightY = getRegionOfInterestPixelY(mp_pose.PoseLandmark.RIGHT_HIP)
                     midHipY = (hipLeftY + hipRightY) / 2
 
+                    # Absolute Nose Y
+                    absoluteNoseY = y+noseY
+
                     # Relative Height calculation (Hip Y - Nose Y)
                     relativeHeight = midHipY - noseY
 
                     if (relativeHeight > 0):
                         data['relativeHeight'] = relativeHeight
                         data['noseYReference'] = noseY  # Used for alignment
+                        data['noseYAbsolute'] = absoluteNoseY
                         minRelativeHeight = min(minRelativeHeight, relativeHeight)
                     else:
                         data['skip'] = True
@@ -128,7 +132,12 @@ def analyzePersonHeight(originalImage, personData):
         if minRelativeHeight == float('inf'):
             return [], 0  # Return empty list and zero height if no valid measurements
 
-    return personData, minRelativeHeight
+    shortestPersonAbsoluteNoseY = float('inf')
+    for data in personData:
+        if data['relativeHeight'] == minRelativeHeight:
+            shortestPersonAbsoluteNoseY = data['noseYAbsolute']
+            break
+    return personData, minRelativeHeight, shortestPersonAbsoluteNoseY
 
 # Function: ScaleToShortestPerson()
 # Readjusts the height of everyone so that they are the same height
@@ -152,14 +161,14 @@ def scaleToShortestPersonAndPaste(inputImagePath, backgroundImagePath):
     personData = detectAndBoxPeople(originalImage)
 
     # Find Shortest Person (Pose Analysis):
-    personData, minRelativeHeight = analyzePersonHeight(originalImage, personData)
+    personData, minRelativeHeight, shortestPersonAbsoluteNoseY = analyzePersonHeight(originalImage, personData)
 
     if not personData:
         print("Could not detect person")
         return
 
     # Scale, Segment, and Paste
-    alignmentYCanvas = int(finalCanvas.shape[0] * NOSE_ALIGNMENT_Y_RATIO)
+    alignmentYCanvas = int(shortestPersonAbsoluteNoseY)
 
     with mp_selfie.SelfieSegmentation(model_selection=1) as segmenter:
         for data in personData:
