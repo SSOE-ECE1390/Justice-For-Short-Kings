@@ -7,8 +7,8 @@ from MinimumHeightFunctions import (
     scaleToShortestPersonAndPaste,
 )
 def runMinHeightFunctionsSelector():
-    INPUT_IMAGE_PATH = "Images/image1.jpg"
-    BACKGROUND_IMAGE_PATH = "Background_Images/background_image1.jpg"
+    INPUT_IMAGE_PATH = "Images/image3.png"
+    BACKGROUND_IMAGE_PATH = "Background_Images/background_image3.jpg"
 
     print("\nMINIMUM HEIGHT FUNCTIONS SELECTOR")
     choice = input ("Enter 1 for Crop To Shortest, or 2 for Scale To Shortest: ")

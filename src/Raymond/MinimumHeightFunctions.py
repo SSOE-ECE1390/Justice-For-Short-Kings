@@ -209,9 +209,9 @@ def scaleToShortestPersonAndPaste(inputImagePath, backgroundImagePath):
 
     # Display
     padding = 10
-    spacer = np.zeros((imageHeight, padding, 3), dtype=np.uint8)
+    spacer = np.zeros((padding, imageWidth, 3), dtype=np.uint8)
 
-    stitchedImage = np.concatenate((originalImage, spacer, finalCanvas), axis=1)
+    stitchedImage = np.concatenate((originalImage, spacer, finalCanvas), axis=0)
 
     RESIZE_FACTOR = 0.5
 
@@ -329,9 +329,9 @@ def cropToShortestPersonAndInpaint(inputImagePath):
     # Display
     RESIZE_FACTOR = 1
     padding = 10
-    spacer = np.zeros((imageHeight, padding, 3), dtype=np.uint8)
+    spacer = np.zeros((padding, imageWidth, 3), dtype=np.uint8)
 
-    stitchedImage = np.concatenate((originalImage, spacer, finalCanvas), axis=1)
+    stitchedImage = np.concatenate((originalImage, spacer, finalCanvas), axis=0)
 
     new_width = int(stitchedImage.shape[1] * RESIZE_FACTOR)
     new_height = int(stitchedImage.shape[0] * RESIZE_FACTOR)
