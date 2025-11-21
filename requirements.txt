@@ -20,3 +20,5 @@ accelerate>=0.25.0
 safetensors>=0.4.0
 controlnet-aux>=0.0.10
 huggingface-hub>=0.34.0,<1.0
+#PyQt6
+#pyqt6-tools
